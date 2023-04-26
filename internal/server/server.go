@@ -1,60 +1,87 @@
 package server
 
 import (
-	"context"
+	"fmt"
 	"github.com/denisschmidt/uploader/internal/auth"
-	"github.com/gorilla/mux"
+	"github.com/denisschmidt/uploader/internal/sql/store"
+	"github.com/gin-gonic/gin"
 	"net/http"
 )
 
-func NewHTTPServer(addr string, authorizer auth.Authorizer) *http.Server {
-	httpsrv := newHTTPServer(authorizer)
-	httpsrv.routes()
-	return &http.Server{
-		Addr:    addr,
-		Handler: httpsrv.router,
+type (
+	dbError struct {
+		Err error
 	}
+)
+
+func (dbe dbError) Error() string {
+	return fmt.Sprintf("database error: %s", dbe.Err)
 }
 
-type httpServer struct {
-	auth   auth.Authorizer
-	router *mux.Router
+func (dbe dbError) Unwrap() error {
+	return dbe.Err
 }
 
-func newHTTPServer(authorizer auth.Authorizer) *httpServer {
-	s := &httpServer{
+func NewHTTPServer(authorizer auth.Authorizer, db store.Store) *HttpServer {
+	router := gin.Default()
+	s := &HttpServer{
 		auth:   authorizer,
-		router: mux.NewRouter(),
+		Router: router,
+		db:     db,
 	}
+	s.routes()
 	return s
 }
 
-func (s *httpServer) routes() {
-	s.router.HandleFunc("/api/auth", s.authPost()).Methods(http.MethodPost)
-	s.router.HandleFunc("/api/auth", s.authDelete()).Methods(http.MethodDelete)
-	s.router.Use(s.checkAuth)
+type HttpServer struct {
+	auth   auth.Authorizer
+	Router *gin.Engine
+	db     store.Store
 }
 
-func (s *httpServer) authPost() http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		s.auth.StartSession(writer, request)
+func (s *HttpServer) routes() {
+	s.Router.POST("/api/auth", s.authPost())
+
+	s.Router.Use(s.checkAuth())
+
+	protectedApi := s.Router.Group("api")
+
+	protectedApi.Use(s.requireAuth())
+	{
+		protectedApi.POST("/file", s.filePost())
 	}
 }
 
-func (s *httpServer) authDelete() http.HandlerFunc {
+func (s *HttpServer) requireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		_, ok := c.Get("has-auth")
+		if !ok {
+			s.auth.ClearSession(c.Writer)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "Auth required",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+func (s *HttpServer) checkAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		hasAuth := s.auth.Authenticate(c.Request)
+		c.Set("has-auth", hasAuth)
+		c.Next()
+	}
+}
+
+func (s *HttpServer) authPost() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.auth.StartSession(c)
+	}
+}
+
+func (s *HttpServer) authDelete() http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		s.auth.ClearSession(writer)
 	}
-}
-
-type authContextKey struct {
-	name string
-}
-
-func (s *httpServer) checkAuth(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(write http.ResponseWriter, request *http.Request) {
-		hasAuth := s.auth.Authenticate((request))
-		ctx := context.WithValue(request.Context(), authContextKey{"is-authenticated"}, hasAuth)
-		h.ServeHTTP(write, request.WithContext(ctx))
-	})
 }

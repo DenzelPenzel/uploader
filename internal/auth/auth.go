@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/pbkdf2"
 	"net/http"
 	"time"
@@ -19,6 +20,10 @@ type (
 	Authorizer struct {
 		secret secret
 	}
+
+	Login struct {
+		Secret string `form:"secretKey" json:"secretKey" xml:"secretKey" binding:"required"`
+	}
 )
 
 func New(sharedSecret string) (Authorizer, error) {
@@ -31,19 +36,35 @@ func New(sharedSecret string) (Authorizer, error) {
 	}, nil
 }
 
-func (a *Authorizer) StartSession(write http.ResponseWriter, request *http.Request) {
-	s, err := getRequestSecret(request)
+func (a *Authorizer) StartSession(c *gin.Context) {
+	var json Login
+
+	if err := c.ShouldBindJSON(&json); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	s, err := parseSecret([]byte(json.Secret))
+
 	if err != nil {
-		http.Error(write, "Invalid secret", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid secret"})
 		return
 	}
 
 	if !isSecretsEqual(s, a.secret) {
-		http.Error(write, "Incorrect secret", http.StatusUnauthorized)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Incorrect secret"})
 		return
 	}
 
-	a.createCookie(write)
+	cookie := &http.Cookie{
+		Name:     authCookie,
+		Value:    base64.StdEncoding.EncodeToString(a.secret),
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Now().Add(time.Hour * 24 * 30),
+	}
+	http.SetCookie(c.Writer, cookie)
 }
 
 func (a *Authorizer) ClearSession(write http.ResponseWriter) {
@@ -57,8 +78,8 @@ func (a *Authorizer) ClearSession(write http.ResponseWriter) {
 	})
 }
 
-func (a *Authorizer) Authenticate(request *http.Request) bool {
-	cookie, err := request.Cookie(authCookie)
+func (a *Authorizer) Authenticate(c *http.Request) bool {
+	cookie, err := c.Cookie(authCookie)
 	if err != nil {
 		return false
 	}
@@ -68,17 +89,6 @@ func (a *Authorizer) Authenticate(request *http.Request) bool {
 	}
 
 	return isSecretsEqual(s, a.secret)
-}
-
-func (a *Authorizer) createCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     authCookie,
-		Value:    base64.StdEncoding.EncodeToString(a.secret),
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Expires:  time.Now().Add(time.Hour * 24 * 30),
-	})
 }
 
 type SecretRequest struct {
