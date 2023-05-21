@@ -1,0 +1,16 @@
+# Compiled binaries
+bin/
+
+# Persistent data directory
+data/
+
+# Environment variables, which may contain secrets
+*.env
+
+# Unit test code coverage output
+.coverage.*
+
+node_modules/
+
+# System files
+.DS_Store

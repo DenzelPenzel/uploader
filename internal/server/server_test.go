@@ -1,10 +1,10 @@
 package server_test
 
 import (
+	"github.com/denisschmidt/uploader/config"
 	"github.com/denisschmidt/uploader/internal/auth"
-	"github.com/denisschmidt/uploader/internal/db"
 	"github.com/denisschmidt/uploader/internal/server"
-	db2 "github.com/denisschmidt/uploader/internal/sql/db"
+	"github.com/denisschmidt/uploader/internal/store/db/fake_db"
 	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
@@ -13,30 +13,33 @@ import (
 )
 
 func TestServer(t *testing.T) {
-	for scenario, fn := range map[string]func(t *testing.T, server *server.HttpServer){
+	for scenario, fn := range map[string]func(t *testing.T, server *server.Server){
 		"authorized success":     testSuccessAuthorized,
 		"authorized failed":      testFailedAuthorized,
 		"authorized bad request": testBadRequestAuthorized,
 	} {
 		t.Run(scenario, func(t *testing.T) {
-			server, teardown := setupTest(t)
+			s, teardown := setupTest(t)
 			defer teardown()
-			fn(t, server)
+			fn(t, s)
 		})
 	}
 }
 
-func setupTest(t *testing.T) (*server.HttpServer, func()) {
+func setupTest(t *testing.T) (*server.Server, func()) {
 	t.Helper()
-
-	store := db2.New()
-	authenticator, err := auth.New("hello")
+	chunkSize := 5
+	defaultConfig := config.DefaultConfig()
+	defaultConfig.SecretKey = "hello"
+	database := fake_db.NewSqlWithChunk(chunkSize)
+	authenticator, err := auth.New(defaultConfig.SecretKey)
+	s, err := server.New(defaultConfig, database, &authenticator)
 	require.NoError(t, err)
-	server := server.NewHTTPServer(authenticator, store)
-	return server, func() {}
+
+	return s, func() {}
 }
 
-func testSuccessAuthorized(t *testing.T, server *server.HttpServer) {
+func testSuccessAuthorized(t *testing.T, s *server.Server) {
 	body := `{"secretKey": "hello"}`
 
 	req, err := http.NewRequest("POST", "/api/auth", strings.NewReader(body))
@@ -44,7 +47,7 @@ func testSuccessAuthorized(t *testing.T, server *server.HttpServer) {
 	req.Header.Add("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	server.Router.ServeHTTP(w, req)
+	s.ServeHTTP(w, req)
 	status := w.Code
 	require.Equal(t, status, http.StatusOK)
 
@@ -52,7 +55,7 @@ func testSuccessAuthorized(t *testing.T, server *server.HttpServer) {
 	require.Equal(t, buf.Len(), 0)
 }
 
-func testFailedAuthorized(t *testing.T, server *server.HttpServer) {
+func testFailedAuthorized(t *testing.T, s *server.Server) {
 	body := `{"secretKey": "hello world"}`
 
 	req, err := http.NewRequest("POST", "/api/auth", strings.NewReader(body))
@@ -60,12 +63,12 @@ func testFailedAuthorized(t *testing.T, server *server.HttpServer) {
 	req.Header.Add("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	server.Router.ServeHTTP(w, req)
+	s.ServeHTTP(w, req)
 	status := w.Code
 	require.Equal(t, status, http.StatusUnauthorized)
 }
 
-func testBadRequestAuthorized(t *testing.T, server *server.HttpServer) {
+func testBadRequestAuthorized(t *testing.T, s *server.Server) {
 	body := `{"secretKey_1": "hello world"}`
 
 	req, err := http.NewRequest("POST", "/api/auth", strings.NewReader(body))
@@ -73,7 +76,7 @@ func testBadRequestAuthorized(t *testing.T, server *server.HttpServer) {
 	req.Header.Add("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	server.Router.ServeHTTP(w, req)
+	s.ServeHTTP(w, req)
 	status := w.Code
 	require.Equal(t, status, http.StatusBadRequest)
 }

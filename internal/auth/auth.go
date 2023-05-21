@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/pbkdf2"
@@ -18,11 +17,15 @@ type (
 	secret []byte
 
 	Authorizer struct {
-		secret secret
+		secret
 	}
 
 	Login struct {
 		Secret string `form:"secretKey" json:"secretKey" xml:"secretKey" binding:"required"`
+	}
+
+	SecretRequest struct {
+		SecretKey string `json:"secretKey"`
 	}
 )
 
@@ -31,9 +34,7 @@ func New(sharedSecret string) (Authorizer, error) {
 	if err != nil {
 		return Authorizer{}, err
 	}
-	return Authorizer{
-		secret: ss,
-	}, nil
+	return Authorizer{secret: ss}, nil
 }
 
 func (a *Authorizer) StartSession(c *gin.Context) {
@@ -67,8 +68,8 @@ func (a *Authorizer) StartSession(c *gin.Context) {
 	http.SetCookie(c.Writer, cookie)
 }
 
-func (a *Authorizer) ClearSession(write http.ResponseWriter) {
-	http.SetCookie(write, &http.Cookie{
+func (a *Authorizer) ClearSession(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
 		Name:     authCookie,
 		Value:    "",
 		Path:     "/",
@@ -78,8 +79,8 @@ func (a *Authorizer) ClearSession(write http.ResponseWriter) {
 	})
 }
 
-func (a *Authorizer) Authenticate(c *http.Request) bool {
-	cookie, err := c.Cookie(authCookie)
+func (a *Authorizer) Authenticate(r *http.Request) bool {
+	cookie, err := r.Cookie(authCookie)
 	if err != nil {
 		return false
 	}
@@ -89,19 +90,6 @@ func (a *Authorizer) Authenticate(c *http.Request) bool {
 	}
 
 	return isSecretsEqual(s, a.secret)
-}
-
-type SecretRequest struct {
-	SecretKey string `json:"secretKey"`
-}
-
-func getRequestSecret(r *http.Request) (secret, error) {
-	var req SecretRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
-	if err != nil {
-		return secret{}, err
-	}
-	return parseSecret([]byte(req.SecretKey))
 }
 
 func getSecretFromBase64(b64encoded string) (secret, error) {

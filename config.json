@@ -1,0 +1,16 @@
+{
+  "port": 4001,
+  "secret_key": "qwerty123",
+  "allowed_headers": ["Content-Type", "Authorization", "Accept", "Accept-Encoding", "Accept-Language"],
+  "allowed_origins": ["*"],
+  "allowed_methods": ["*"],
+  "options": {
+    "enable_delete": true,
+    "enable_health": true,
+    "enable_stats": true,
+    "enable_prometheus": true,
+    "allowed_ip_addresses": [
+      "127.0.0.1"
+    ]
+  }
+}

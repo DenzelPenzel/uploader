@@ -1,49 +1,61 @@
 package main
 
 import (
-	"flag"
 	"fmt"
-	"github.com/denisschmidt/uploader/internal/auth"
-	"github.com/denisschmidt/uploader/internal/db"
+	"github.com/denisschmidt/uploader/constants"
 	"github.com/denisschmidt/uploader/internal/server"
-	db2 "github.com/denisschmidt/uploader/internal/sql/db"
-	"log"
+	"github.com/urfave/cli"
 	"os"
-	"path/filepath"
 )
 
 func main() {
-	log.Print("Starting uploader server")
-	port := getEnvKey("PORT")
-	log.Printf("Listening on %s", port)
-	dbPath := flag.String("db", "data/database.db", "path to sql database")
-
-	flag.Parse()
-
-	isLiteStream := os.Getenv("LITESTREAM_BUCKET") != ""
-	authenticator, err := auth.New(getEnvKey("secretKey"))
-
-	if err != nil {
-		log.Fatalf("invalid shared secret: %v", err)
+	app := cli.NewApp()
+	app.Name = "uploader"
+	app.Version = fmt.Sprintf("%s [git:%s:%s]\ncompiled using %s at %s", constants.Version,
+		constants.Branch, constants.Revision, constants.Compiler, constants.BuildTime)
+	app.Author = "denzel"
+	app.Usage = "Upload files"
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:   "config, c",
+			Usage:  "Config file path",
+			EnvVar: "UPLOADER_CONFIG_PATH",
+		},
 	}
+	app.Commands = []cli.Command{
+		{
+			Name:      "version",
+			ShortName: "v",
+			Usage:     "Retrieve the version number",
+			Action: func(c *cli.Context) {
+				fmt.Printf("picfit %s\n", constants.Version)
+			},
+		},
+	}
+	app.Action = func(c *cli.Context) {
+		config := c.String("config")
 
-	// check if path to database exists, if not create a dir
-	if _, err := os.Stat(filepath.Dir(*dbPath)); os.IsNotExist(err) {
-		if err := os.Mkdir(filepath.Dir(*dbPath), os.ModePerm); err != nil {
-			panic(err)
+		if config != "" {
+			if _, err := os.Stat(config); err != nil {
+				fmt.Fprintf(os.Stderr, "Can't find config file `%s`\n", config)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Can't find config file\n")
+			os.Exit(1)
 		}
+
+		// context.Background()
+		err := server.Run(config)
+
+		if err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(1)
+		}
+
 	}
-
-	db := db2.New(*dbPath, isLiteStream)
-
-	s := server.NewHTTPServer(authenticator, db)
-	s.Router.Run(fmt.Sprintf(":%s", port))
-}
-
-func getEnvKey(key string) string {
-	val := os.Getenv(key)
-	if val == "" {
-		panic(fmt.Sprintf("missing required env key: %s", key))
+	err := app.Run(os.Args)
+	if err != nil {
+		panic(err)
 	}
-	return val
 }

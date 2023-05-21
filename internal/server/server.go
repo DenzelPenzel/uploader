@@ -1,87 +1,71 @@
 package server
 
 import (
-	"fmt"
+	"github.com/denisschmidt/uploader/config"
 	"github.com/denisschmidt/uploader/internal/auth"
-	"github.com/denisschmidt/uploader/internal/sql/store"
-	"github.com/gin-gonic/gin"
+	"github.com/denisschmidt/uploader/internal/store"
+	"github.com/denisschmidt/uploader/internal/store/db"
+	"github.com/denisschmidt/uploader/internal/types"
 	"net/http"
+	"os"
+	"path/filepath"
 )
 
-type (
-	dbError struct {
-		Err error
+type Server struct {
+	http *HttpServer
+}
+
+func New(config *config.Config, database store.Store, authenticator types.Authorizer) (*Server, error) {
+	httpServer, err := NewHTTPServer(config, database, authenticator)
+	if err != nil {
+		return nil, err
 	}
-)
 
-func (dbe dbError) Error() string {
-	return fmt.Sprintf("database error: %s", dbe.Err)
-}
-
-func (dbe dbError) Unwrap() error {
-	return dbe.Err
-}
-
-func NewHTTPServer(authorizer auth.Authorizer, db store.Store) *HttpServer {
-	router := gin.Default()
-	s := &HttpServer{
-		auth:   authorizer,
-		Router: router,
-		db:     db,
+	server := &Server{
+		http: httpServer,
 	}
-	s.routes()
-	return s
+	return server, err
 }
 
-type HttpServer struct {
-	auth   auth.Authorizer
-	Router *gin.Engine
-	db     store.Store
+func (s *Server) Run() error {
+	return s.http.Run()
 }
 
-func (s *HttpServer) routes() {
-	s.Router.POST("/api/auth", s.authPost())
-
-	s.Router.Use(s.checkAuth())
-
-	protectedApi := s.Router.Group("api")
-
-	protectedApi.Use(s.requireAuth())
-	{
-		protectedApi.POST("/file", s.filePost())
-	}
+func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	s.http.engine.ServeHTTP(w, req)
 }
 
-func (s *HttpServer) requireAuth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		_, ok := c.Get("has-auth")
-		if !ok {
-			s.auth.ClearSession(c.Writer)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Auth required",
-			})
-			return
+func initDatabase(cfg *config.Config) (store.Store, error) {
+	if _, err := os.Stat(filepath.Dir(cfg.DBPath)); os.IsNotExist(err) {
+		if err := os.Mkdir(filepath.Dir(cfg.DBPath), os.ModePerm); err != nil {
+			return nil, err
 		}
-		c.Next()
 	}
+	database := db.New(cfg.DBPath, cfg.DBChunkSize, true)
+
+	return database, nil
 }
 
-func (s *HttpServer) checkAuth() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		hasAuth := s.auth.Authenticate(c.Request)
-		c.Set("has-auth", hasAuth)
-		c.Next()
+func Run(path string) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
 	}
-}
 
-func (s *HttpServer) authPost() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		s.auth.StartSession(c)
+	database, err := initDatabase(cfg)
+	if err != nil {
+		return err
 	}
-}
 
-func (s *HttpServer) authDelete() http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		s.auth.ClearSession(writer)
+	authenticator, err := auth.New(cfg.SecretKey)
+	if err != nil {
+		return err
 	}
+
+	server, err := New(cfg, database, &authenticator)
+	if err != nil {
+		return err
+	}
+
+	return server.Run()
 }
